@@ -1,12 +1,11 @@
 # guagualeEXP
 
-A simple scraper that fetches prize information for Taiwan Lottery scratch games and estimates the expected value of each game after taxes.
+A simple scraper that fetches prize information for Taiwan Lottery scratch games using the official JSON API and estimates each game's expected value after taxes.
 
 ## Requirements
 
 - Python 3.11+
 - `requests`
-- `beautifulsoup4`
 
 Install dependencies with:
 
@@ -26,7 +25,7 @@ python scrape.py
 python scrape.py --json data/sample_games.json
 ```
 
-The script will request the list of available scratch cards from the official Taiwan Lottery website, fetch the prize structure for each game, and print the expected value for every scratcher sorted from highest to lowest.
+The script retrieves the list of currently sold games from `https://www.taiwanlottery.com` and downloads each game's prize structure via the JSON API. It then prints the expected value for every scratcher sorted from highest to lowest.
 
 > **Note**
-> The official website occasionally blocks automated requests, resulting in `HTTP 503` errors. If fetching live data fails, use the `--json` option with `data/sample_games.json` to see how results are presented.
+> The script retries failed requests automatically. If live scraping still fails, run with `--json data/sample_games.json` to see example output.

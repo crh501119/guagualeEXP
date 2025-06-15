@@ -1,12 +1,39 @@
-import json
-import requests
-from bs4 import BeautifulSoup
-from dataclasses import dataclass, field
-from typing import List, Iterable, Optional
 import argparse
+import json
+from dataclasses import dataclass, field
+from typing import Iterable, List, Optional
 
-BASE_URL = "https://www.taiwanlottery.com.tw"
-LIST_URL = f"{BASE_URL}/zh-hant/instant/instant_index.aspx"
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+BASE_URL = "https://www.taiwanlottery.com"
+LIST_URL = f"{BASE_URL}/Instant/RWD/GetGameList?channel=M"
+INFO_URL = f"{BASE_URL}/Instant/RWD/GetGameInfo?gameId={{}}"
+
+
+def create_session() -> requests.Session:
+    """Return a requests session with retry strategy."""
+    session = requests.Session()
+    retry = Retry(
+        total=5,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.headers.update(
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0 Safari/537.36"
+            ),
+            "Accept": "application/json, text/plain, */*",
+        }
+    )
+    return session
 
 @dataclass
 class PrizeTier:
@@ -16,16 +43,16 @@ class PrizeTier:
 
 @dataclass
 class ScratchGame:
+    game_id: int
     name: str
     price: int
-    url: str
     prizes: List[PrizeTier] = field(default_factory=list)
+    remain_total: int = 0
 
     def expected_value(self) -> float:
-        total_remaining = sum(t.remaining for t in self.prizes)
+        total_remaining = self.remain_total or sum(t.remaining for t in self.prizes)
         if total_remaining == 0:
             return -self.price
-        # total value after taxes
         total_value = sum(_net_amount(t.amount) * t.remaining for t in self.prizes)
         return total_value / total_remaining - self.price
 
@@ -37,25 +64,21 @@ def _net_amount(amount: int) -> float:
     return float(amount)
 
 def fetch_game_list(session: requests.Session) -> List[ScratchGame]:
-    resp = session.get(LIST_URL)
+    resp = session.get(LIST_URL, timeout=(3, 10))
     resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    data = resp.json()
     games = []
-    # The structure may change; this is a best guess using common table layout
-    for a in soup.select("a[href*='instant_']"):
-        name = a.get_text(strip=True)
-        href = a.get("href")
-        if not href:
+    for g in data.get("GameList", []):
+        if g.get("RemainTotal", 0) == 0:
             continue
-        if not href.startswith("http"):
-            href = BASE_URL + href
-        # Extract price from sibling element if available
-        price_text = a.find_next("span")
-        price = 0
-        if price_text:
-            digits = ''.join(filter(str.isdigit, price_text.get_text()))
-            price = int(digits) if digits else 0
-        games.append(ScratchGame(name=name, price=price, url=href))
+        games.append(
+            ScratchGame(
+                game_id=g["GameID"],
+                name=g["GameName"],
+                price=g["Price"],
+                remain_total=g.get("RemainTotal", 0),
+            )
+        )
     return games
 
 
@@ -66,28 +89,29 @@ def load_games_from_json(path: str) -> List[ScratchGame]:
     for g in data:
         prizes = [PrizeTier(**p) for p in g.get("prizes", [])]
         games.append(
-            ScratchGame(name=g.get("name", ""), price=g.get("price", 0), url="", prizes=prizes)
+            ScratchGame(
+                game_id=g.get("game_id", 0),
+                name=g.get("name", ""),
+                price=g.get("price", 0),
+                prizes=prizes,
+                remain_total=sum(p.remaining for p in prizes),
+            )
         )
     return games
 
 def fetch_game_details(session: requests.Session, game: ScratchGame) -> None:
-    resp = session.get(game.url)
+    resp = session.get(INFO_URL.format(game.game_id), timeout=(3, 10))
     resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
-    table = soup.find("table")
-    if not table:
-        return
-    for tr in table.select("tr"):
-        cells = [td.get_text(strip=True) for td in tr.select("td")]
-        if len(cells) < 3:
-            continue
-        try:
-            amount = int(cells[0].replace(',', ''))
-            total = int(cells[1].replace(',', ''))
-            remaining = int(cells[2].replace(',', ''))
-        except ValueError:
-            continue
-        game.prizes.append(PrizeTier(amount, total, remaining))
+    data = resp.json()
+    game.remain_total = data.get("RemainTotal", 0)
+    game.prizes = [
+        PrizeTier(
+            amount=p["PrizeAmount"],
+            total=p["PrizeCount"],
+            remaining=p["RemainCount"],
+        )
+        for p in data.get("PrizeInfoList", [])
+    ]
 
 
 def main(argv: Optional[Iterable[str]] = None) -> None:
@@ -98,8 +122,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     if args.json_path:
         game_list = load_games_from_json(args.json_path)
     else:
-        with requests.Session() as s:
-            s.headers.update({"User-Agent": "Mozilla/5.0"})
+        with create_session() as s:
             try:
                 game_list = fetch_game_list(s)
             except Exception as e:
@@ -114,7 +137,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     game_list.sort(key=lambda g: g.expected_value(), reverse=True)
     for g in game_list:
         ev = g.expected_value()
-        print(f"{g.name}\tPrice: {g.price}\tEV: {ev:.2f}")
+        print(f"{g.game_id} {g.name}\tPrice: {g.price}\tEV: {ev:.2f}")
 
 if __name__ == "__main__":
     main()
