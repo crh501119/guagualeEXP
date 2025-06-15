@@ -1,0 +1,20 @@
+[
+  {
+    "name": "超級幸運",
+    "price": 200,
+    "prizes": [
+      {"amount": 2000000, "total": 3, "remaining": 1},
+      {"amount": 200000, "total": 50, "remaining": 25},
+      {"amount": 2000, "total": 1000, "remaining": 800}
+    ]
+  },
+  {
+    "name": "好運連連",
+    "price": 500,
+    "prizes": [
+      {"amount": 5000000, "total": 2, "remaining": 1},
+      {"amount": 500000, "total": 20, "remaining": 10},
+      {"amount": 5000, "total": 500, "remaining": 450}
+    ]
+  }
+]
